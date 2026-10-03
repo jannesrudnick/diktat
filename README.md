@@ -29,6 +29,21 @@ Tools like Wispr Flow or Superwhisper are great, but they're closed source and c
 
 ## Install
 
+### Download
+
+Grab the latest `.dmg` from [**Releases**](https://github.com/jannesrudnick/diktat/releases/latest):
+
+- **Apple Silicon** (M1 and newer): `Diktat-x.y.z-arm64.dmg`
+- **Intel**: `Diktat-x.y.z-x64.dmg`
+
+Open it, drag **Diktat** into **Applications**.
+
+> **First launch:** Diktat isn't notarized by Apple (yet), so macOS will block it the first time. Open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**. Or run once in Terminal:
+>
+> ```bash
+> xattr -dr com.apple.quarantine /Applications/Diktat.app
+> ```
+
 ### From source
 
 Requires Node.js 20+ and [pnpm](https://pnpm.io).
@@ -40,13 +55,7 @@ pnpm install
 pnpm start
 ```
 
-### Build a `.dmg`
-
-```bash
-pnpm dist
-```
-
-The installer lands in `dist/`. The app is **not code-signed**, so the first time you open it, right-click → **Open** to get past Gatekeeper.
+Build your own `.dmg` files (arm64 and x64) into `dist/` with `pnpm dist`.
 
 ## Setup
 
