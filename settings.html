@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Diktat – API-Key</title>
+<style>
+  body { font: 14px -apple-system, sans-serif; padding: 20px; color-scheme: light dark; }
+  input { width: 100%; box-sizing: border-box; padding: 8px; margin: 8px 0 12px; }
+</style>
+<label>Soniox API-Key (<a href="https://console.soniox.com" target="_blank">console.soniox.com</a>)</label>
+<input id="key" type="password" autofocus>
+<button id="save">Speichern</button>
+<script>
+  api.getKey().then((k) => (key.value = k))
+  save.onclick = () => key.value.trim() && api.setKey(key.value)
+  key.onkeydown = (e) => { if (e.key === 'Enter') save.click() }
+</script>

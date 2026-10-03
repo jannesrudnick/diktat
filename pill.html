@@ -1,0 +1,182 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  /* Look borrowed from qey's recording dock. */
+  :root { --recording: oklch(0.68 0.22 25); --level: 0; }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  body {
+    display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 8px;
+    padding: 0 16px 16px; box-sizing: border-box;
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif; -webkit-font-smoothing: antialiased; color: #f4f4f5;
+  }
+  .surface {
+    background: rgb(9 9 11 / .92); border: 1px solid rgb(255 255 255 / .1); backdrop-filter: blur(24px);
+    box-shadow: 0 12px 40px -8px rgb(0 0 0 / .55), 0 0 0 1px rgb(0 0 0 / .4);
+  }
+  #card {
+    max-width: 100%; box-sizing: border-box; border-radius: 16px; padding: 8px 12px;
+    animation: in .15s ease-out;
+  }
+  #text { margin: 0; max-height: 54px; overflow: hidden; display: flex; flex-direction: column-reverse; }
+  #text i { color: #a1a1aa; }
+  #text .hint { color: #71717a; }
+  #text .err { color: #fca5a5; }
+  #dock { display: flex; align-items: center; gap: 4px; border-radius: 999px; padding: 6px; animation: in .15s ease-out; }
+  .rec { display: flex; align-items: center; gap: 8px; padding: 0 4px 0 8px; }
+  #dot {
+    width: 10px; height: 10px; border-radius: 50%; background: var(--recording);
+    box-shadow: 0 0 0 calc(3px + var(--level) * 7px) color-mix(in oklch, var(--recording) 25%, transparent);
+    transition: box-shadow 80ms;
+  }
+  #timer { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
+  #bars { display: flex; align-items: center; gap: 2px; height: 16px; padding: 0 6px; }
+  #bars span { width: 3px; border-radius: 3px; background: #34d399; height: 3px; transition: height 80ms; }
+  .divider { width: 1px; height: 20px; background: rgb(255 255 255 / .1); margin: 0 2px; }
+  button {
+    font: inherit; border: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+    height: 32px; border-radius: 999px; transition: background .15s, transform .1s;
+  }
+  button:active { transform: scale(.98); }
+  #cancel { width: 32px; justify-content: center; background: transparent; color: #a1a1aa; }
+  #cancel:hover { background: rgb(255 255 255 / .1); color: #fff; }
+  #insert { background: #fff; color: #09090b; font-weight: 500; padding: 0 12px; margin-left: 2px; }
+  #insert:hover { background: #e4e4e7; }
+  kbd { font: 11px ui-monospace, monospace; opacity: .55; }
+  .busy #insert, .busy #cancel { opacity: .5; pointer-events: none; }
+  @keyframes in { from { opacity: 0; transform: translateY(4px) } }
+</style>
+<div id="card" class="surface"><p id="text"></p></div>
+<div id="dock" class="surface">
+  <div class="rec"><span id="dot"></span><span id="timer">00:00</span></div>
+  <div id="bars"><span></span><span></span><span></span><span></span><span></span></div>
+  <span class="divider"></span>
+  <button id="cancel" title="Verwerfen (Esc)">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+  </button>
+  <button id="insert" title="Einfügen (Enter)">Einfügen <kbd>⏎</kbd></button>
+</div>
+<script>
+// Soniox real-time STT: https://soniox.com/docs/api-reference/stt/websocket-api
+const ENDPOINT = 'wss://stt-rt.soniox.com/transcribe-websocket'
+const RATE = 16000
+const BAR_WEIGHTS = [0.35, 0.7, 1, 0.7, 0.35]
+
+// AudioWorklet that forwards raw Float32 mic samples to the main thread.
+const worklet = URL.createObjectURL(new Blob([`
+  registerProcessor('tap', class extends AudioWorkletProcessor {
+    process([input]) { if (input[0]) this.port.postMessage(input[0].slice()); return true }
+  })`], { type: 'text/javascript' }))
+
+let s = null // current session
+
+const esc = (t) => t.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c])
+const show = (final, partial) => {
+  text.innerHTML = final || partial ? `<span>${esc(final)}<i>${esc(partial)}</i></span>` : '<span class="hint">Sprich einfach …</span>'
+}
+
+function setLevel(level) {
+  document.documentElement.style.setProperty('--level', level)
+  bars.querySelectorAll('span').forEach((b, i) => (b.style.height = `${Math.max(3, Math.min(16, level * BAR_WEIGHTS[i] * 22))}px`))
+}
+
+function finish(result) {
+  if (!s) return
+  clearInterval(s.timer)
+  s.stream?.getTracks().forEach((t) => t.stop())
+  s.ctx?.close()
+  s.ws.close()
+  s = null
+  document.body.classList.remove('busy')
+  setLevel(0)
+  api.done(result.trim())
+}
+
+function fail(msg) {
+  const ses = s
+  text.innerHTML = `<span class="err">⚠ ${esc(msg)}</span>`
+  setTimeout(() => s === ses && finish(''), 3000)
+}
+
+async function start() {
+  const ses = (s = { final: '', queue: [], level: 0 })
+  const t0 = Date.now()
+  const tick = () => {
+    const sec = Math.floor((Date.now() - t0) / 1000)
+    timer.textContent = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`
+  }
+  tick()
+  ses.timer = setInterval(tick, 250)
+  show('', '')
+
+  ses.ws = new WebSocket(ENDPOINT)
+  ses.ws.onopen = async () => {
+    ses.ws.send(JSON.stringify({
+      api_key: await api.getKey(),
+      model: 'stt-rt-v5',
+      audio_format: 'pcm_f32le',
+      sample_rate: RATE,
+      num_channels: 1,
+      language_hints: ['de', 'en'],
+    }))
+    ses.queue.forEach((b) => ses.ws.send(b))
+    ses.queue = null
+  }
+  ses.ws.onmessage = ({ data }) => {
+    const msg = JSON.parse(data)
+    if (msg.error_code) return fail(msg.error_message)
+    let partial = ''
+    for (const t of msg.tokens || []) {
+      if (/^<.+>$/.test(t.text)) continue // control tokens like <end>, <fin>
+      t.is_final ? (ses.final += t.text) : (partial += t.text)
+    }
+    if (msg.finished) return finish(ses.final)
+    show(ses.final, partial)
+  }
+  ses.ws.onerror = () => fail('Verbindung fehlgeschlagen')
+
+  try {
+    ses.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } })
+  } catch (e) {
+    return fail('Kein Mikrofonzugriff')
+  }
+  if (s !== ses) return ses.stream.getTracks().forEach((t) => t.stop()) // cancelled meanwhile
+  ses.ctx = new AudioContext({ sampleRate: RATE })
+  await ses.ctx.audioWorklet.addModule(worklet)
+  const node = new AudioWorkletNode(ses.ctx, 'tap')
+  node.port.onmessage = ({ data }) => {
+    if (ses.stopping) return
+    // RMS → 0..1 with fast attack / slow release so the animation feels alive but not jittery.
+    const rms = Math.sqrt(data.reduce((a, v) => a + v * v, 0) / data.length)
+    const target = Math.min(1, rms * 12)
+    ses.level = target > ses.level ? target : ses.level * 0.85 + target * 0.15
+    setLevel(ses.level)
+    ses.queue ? ses.queue.push(data.buffer) : ses.ws.readyState === 1 && ses.ws.send(data.buffer)
+  }
+  ses.ctx.createMediaStreamSource(ses.stream).connect(node)
+}
+
+function stop() {
+  if (!s || s.stopping) return
+  s.stopping = true
+  document.body.classList.add('busy')
+  setLevel(0)
+  s.stream?.getTracks().forEach((t) => t.stop())
+  if (s.ws.readyState === 1 && !s.queue) {
+    s.ws.send('') // empty frame = end of audio; server flushes and replies with finished:true
+    const ses = s
+    setTimeout(() => s === ses && finish(ses.final), 5000) // safety net
+  } else finish('')
+}
+
+api.on('start', start)
+api.on('stop', stop)
+api.on('cancel', () => finish(''))
+insert.onclick = stop
+cancel.onclick = () => finish('')
+
+// Window is click-through except over the card/dock.
+for (const el of [card, dock]) {
+  el.onmouseenter = () => api.mouse(true)
+  el.onmouseleave = () => api.mouse(false)
+}
+</script>

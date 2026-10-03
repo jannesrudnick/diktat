@@ -1,0 +1,31 @@
+{
+  "name": "diktat",
+  "version": "0.1.0",
+  "description": "Floating realtime dictation for macOS (Soniox STT)",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --mac"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "dev.diktat.app",
+    "productName": "Diktat",
+    "files": [
+      "*.js",
+      "*.html"
+    ],
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.productivity",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Diktat transkribiert deine Sprache.",
+        "LSUIElement": true
+      }
+    }
+  }
+}
