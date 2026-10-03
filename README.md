@@ -1,6 +1,6 @@
 # Diktat
 
-**Realtime voice dictation for macOS, in any app. Bring your own API key, pay about a dime per hour.**
+**Realtime voice dictation for macOS, Windows and Linux, in any app. Bring your own API key, pay about a dime per hour.**
 
 Press a shortcut, talk, hit <kbd>Enter</kbd>. Your words appear live in a small floating bubble and get pasted wherever your cursor is: Slack, your editor, the browser, a terminal.
 
@@ -21,33 +21,54 @@ Tools like Wispr Flow or Superwhisper are great, but they're closed source and c
 
 ## Features
 
-- Global shortcut (<kbd>⌘</kbd><kbd>⇧</kbd><kbd>Space</kbd>) from anywhere
+- Global shortcut (<kbd>⌘</kbd><kbd>⇧</kbd><kbd>Space</kbd>, <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Space</kbd> on Windows/Linux) from anywhere
 - Floating bubble with live transcript, recording timer and an audio-level animation
 - <kbd>Enter</kbd> inserts at the cursor, <kbd>Esc</kbd> discards
 - Restores your previous clipboard after pasting, images included
-- Lives in the menu bar with no Dock icon, and can launch at login
-- API key encrypted with the macOS Keychain (`safeStorage`)
+- Lives in the menu bar / system tray, and can launch at login (macOS, Windows)
+- API keys encrypted with the OS keychain (`safeStorage`: Keychain, DPAPI, libsecret)
 
 ## Install
 
-### Download
+Grab the latest installer from [**Releases**](https://github.com/jannesrudnick/diktat/releases/latest).
 
-Grab the latest `.dmg` from [**Releases**](https://github.com/jannesrudnick/diktat/releases/latest):
+### macOS
 
 - **Apple Silicon** (M1 and newer): `Diktat-x.y.z-arm64.dmg`
 - **Intel**: `Diktat-x.y.z-x64.dmg`
 
-Open it, drag **Diktat** into **Applications**.
+Open it and drag **Diktat** into **Applications**.
 
-> **First launch:** Diktat isn't notarized by Apple (yet), so macOS will block it the first time. Open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**. Or run once in Terminal:
+> **First launch:** Diktat isn't notarized by Apple (yet), so macOS blocks it the first time. Open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**. Or run once in Terminal:
 >
 > ```bash
 > xattr -dr com.apple.quarantine /Applications/Diktat.app
 > ```
 
+Grant **Microphone** and **Accessibility** when asked (*System Settings → Privacy & Security*). Accessibility lets Diktat press <kbd>⌘</kbd><kbd>V</kbd> for you. Without it, the transcript still ends up in your clipboard.
+
+### Windows
+
+Run `Diktat-x.y.z-x64.exe`. It installs for your user only, no admin needed.
+
+> **SmartScreen:** the installer isn't code-signed, so Windows may warn you. Click **More info → Run anyway**.
+
+### Linux
+
+- **AppImage** (any distro): `chmod +x Diktat-x.y.z-x86_64.AppImage`, then run it
+- **Debian / Ubuntu**: `sudo apt install ./Diktat-x.y.z-amd64.deb`
+
+To paste automatically, install `xdotool` (X11) or `wtype` (Wayland, wlroots compositors like Sway or Hyprland):
+
+```bash
+sudo apt install xdotool
+```
+
+GNOME and KDE on Wayland don't let apps send keystrokes, so the text lands in your clipboard and you press <kbd>Ctrl</kbd><kbd>V</kbd> yourself. The global shortcut on Wayland goes through the desktop portal, which may ask you to confirm it once.
+
 ### From source
 
-Requires Node.js 20+ and [pnpm](https://pnpm.io).
+Requires Node.js 22+ and [pnpm](https://pnpm.io).
 
 ```bash
 git clone https://github.com/jannesrudnick/diktat.git
@@ -56,23 +77,20 @@ pnpm install
 pnpm start
 ```
 
-Build your own `.dmg` files (arm64 and x64) into `dist/` with `pnpm dist`.
+`pnpm dist` builds installers for your current OS into `dist/`.
 
 ## Setup
 
 1. **Pick a provider** and get an API key (see [Providers](#providers)).
-2. **Paste it** into the window that opens on first launch. You can change it later via menu bar 🎙 → *API-Keys…*.
-3. **Grant permissions** when macOS asks, or later under *System Settings → Privacy & Security*:
-   - **Microphone**: to hear you.
-   - **Accessibility**: to press <kbd>⌘</kbd><kbd>V</kbd> for you. Without it, the transcript still ends up in your clipboard.
+2. **Paste it** into the window that opens on first launch. You can change it later via the tray icon → *API-Keys…*.
 
-> When running via `pnpm start`, the permission entries are named **Electron**, not Diktat.
+> When running via `pnpm start` on macOS, the permission entries are named **Electron**, not Diktat.
 
 ## Usage
 
 | Action | Key |
 |---|---|
-| Start dictating | <kbd>⌘</kbd><kbd>⇧</kbd><kbd>Space</kbd> |
+| Start dictating | <kbd>⌘</kbd><kbd>⇧</kbd><kbd>Space</kbd> (macOS) · <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Space</kbd> (Windows/Linux) |
 | Stop and paste at the cursor | <kbd>Enter</kbd> (or the shortcut again, or click **Einfügen**) |
 | Discard | <kbd>Esc</kbd> (or click ✕) |
 
@@ -86,7 +104,7 @@ While the bubble is open, <kbd>Enter</kbd> and <kbd>Esc</kbd> are captured syste
 | **ElevenLabs** | `scribe_v2_realtime` | $0.39 / hour | [elevenlabs.io](https://elevenlabs.io/app/settings/api-keys) |
 | **OpenAI** | `gpt-live-transcribe` | $1.02 / hour | [platform.openai.com](https://platform.openai.com/api-keys) |
 
-Switch any time via menu bar 🎙 → *Provider*. Keys are stored per provider. Prices are pay-as-you-go list prices at the time of writing.
+Switch any time via the tray icon → *Provider*. Keys are stored per provider. Prices are pay-as-you-go list prices at the time of writing.
 
 Adding a provider is one object in `providers.js` with a `connect(key, on)` function: stream audio in, call `on.text()` / `on.done()` / `on.error()`.
 
@@ -99,10 +117,11 @@ Adding a provider is one object in `providers.js` with a `connect(key, on)` func
                   providers.js → Soniox / ElevenLabs / OpenAI ──▶ live text
  Enter ─────▶ main.js ◀──final text── pill.html
                  │
-                 └─ clipboard ← text, osascript ⌘V, clipboard ← previous contents
+                 └─ clipboard ← text, simulated paste, clipboard ← previous contents
+                    (osascript on macOS, PowerShell SendKeys on Windows, xdotool/wtype on Linux)
 ```
 
-The bubble window is created with `focusable: false`, so the app you were typing in keeps focus the whole time. That's why a plain simulated <kbd>⌘</kbd><kbd>V</kbd> lands in the right place.
+The bubble window is created with `focusable: false`, so the app you were typing in keeps focus the whole time. That's why a plain simulated paste shortcut lands in the right place.
 
 | File | Purpose |
 |---|---|
@@ -125,17 +144,17 @@ There's no settings UI beyond the API key yet. Edit the constants directly:
 ## Privacy
 
 - Audio is streamed **only while the bubble is visible**, and only to the provider you picked ([Soniox](https://soniox.com/policies), [ElevenLabs](https://elevenlabs.io/privacy-policy), [OpenAI](https://openai.com/policies/privacy-policy)).
-- Nothing is stored on disk except your encrypted API keys in `~/Library/Application Support/Diktat/` (`diktat/` when run from source).
+- Nothing is stored on disk except your encrypted API keys in the app's data folder (`~/Library/Application Support/Diktat` on macOS, `%APPDATA%\Diktat` on Windows, `~/.config/Diktat` on Linux; lowercase `diktat` when run from source). On Linux without a keyring, they're stored unencrypted.
 - No analytics, no update pings, no third-party scripts.
 
 ## Troubleshooting
 
 | Problem | Fix |
 |---|---|
-| Text isn't pasted | Grant **Accessibility** to Diktat / Electron, then restart the app. The text is in your clipboard meanwhile. |
+| Text isn't pasted | **macOS:** grant **Accessibility** to Diktat / Electron, then restart the app. **Linux:** install `xdotool` / `wtype`. The text is in your clipboard meanwhile. |
 | "Kein Mikrofonzugriff" | Grant **Microphone** permission. |
 | "Incorrect API key" / "Invalid API key" | Re-enter the key via 🎙 → *API-Keys…*. |
-| Shortcut does nothing | Another app owns <kbd>⌘</kbd><kbd>⇧</kbd><kbd>Space</kbd>. Change `SHORTCUT` in `main.js`. |
+| Shortcut does nothing | Another app owns it. Change `SHORTCUT` in `main.js`. |
 
 ## Roadmap
 
@@ -146,7 +165,7 @@ Ideas, not promises. PRs are welcome:
 - [ ] Optional LLM clean-up pass (remove filler words, fix punctuation)
 - [ ] Push-to-talk (hold to speak)
 - [ ] Signed and notarized releases
-- [ ] Windows and Linux support
+- [ ] arm64 builds for Windows and Linux
 
 ## Alternatives
 
@@ -155,7 +174,7 @@ If Diktat isn't for you, these might be:
 - [OpenWhispr](https://github.com/OpenWhispr/openwhispr): open source, Electron, more features
 - [VoiceInk](https://github.com/Beingpax/VoiceInk), [Handy](https://github.com/cjpais/Handy): open source, fully local Whisper (no live text)
 - Wispr Flow, Superwhisper, Aqua Voice: polished commercial apps
-- macOS Dictation: built in, free (press <kbd>Fn</kbd> twice)
+- Built-in dictation: macOS (press <kbd>Fn</kbd> twice), Windows (<kbd>Win</kbd><kbd>H</kbd>)
 
 ## Contributing
 
