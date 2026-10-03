@@ -1,6 +1,6 @@
 {
   "name": "diktat",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Floating realtime dictation for macOS (Soniox STT)",
   "main": "main.js",
   "scripts": {
