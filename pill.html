@@ -55,10 +55,8 @@
   </button>
   <button id="insert" title="Einfügen (Enter)">Einfügen <kbd>⏎</kbd></button>
 </div>
+<script src="providers.js"></script>
 <script>
-// Soniox real-time STT: https://soniox.com/docs/api-reference/stt/websocket-api
-const ENDPOINT = 'wss://stt-rt.soniox.com/transcribe-websocket'
-const RATE = 16000
 const BAR_WEIGHTS = [0.35, 0.7, 1, 0.7, 0.35]
 
 // AudioWorklet that forwards raw Float32 mic samples to the main thread.
@@ -84,21 +82,24 @@ function finish(result) {
   clearInterval(s.timer)
   s.stream?.getTracks().forEach((t) => t.stop())
   s.ctx?.close()
-  s.ws.close()
+  s.conn.close()
   s = null
   document.body.classList.remove('busy')
   setLevel(0)
   api.done(result.trim())
 }
 
-function fail(msg) {
-  const ses = s
+function fail(ses, msg) {
+  if (s !== ses) return
+  if (ses.stopping) return finish(ses.final) // keep what we have
   text.innerHTML = `<span class="err">⚠ ${esc(msg)}</span>`
   setTimeout(() => s === ses && finish(''), 3000)
 }
 
 async function start() {
-  const ses = (s = { final: '', queue: [], level: 0 })
+  const { provider, key } = await api.getConfig()
+  const p = PROVIDERS[provider]
+  const ses = (s = { final: '', level: 0 })
   const t0 = Date.now()
   const tick = () => {
     const sec = Math.floor((Date.now() - t0) / 1000)
@@ -108,39 +109,19 @@ async function start() {
   ses.timer = setInterval(tick, 250)
   show('', '')
 
-  ses.ws = new WebSocket(ENDPOINT)
-  ses.ws.onopen = async () => {
-    ses.ws.send(JSON.stringify({
-      api_key: await api.getKey(),
-      model: 'stt-rt-v5',
-      audio_format: 'pcm_f32le',
-      sample_rate: RATE,
-      num_channels: 1,
-      language_hints: ['de', 'en'],
-    }))
-    ses.queue.forEach((b) => ses.ws.send(b))
-    ses.queue = null
-  }
-  ses.ws.onmessage = ({ data }) => {
-    const msg = JSON.parse(data)
-    if (msg.error_code) return fail(msg.error_message)
-    let partial = ''
-    for (const t of msg.tokens || []) {
-      if (/^<.+>$/.test(t.text)) continue // control tokens like <end>, <fin>
-      t.is_final ? (ses.final += t.text) : (partial += t.text)
-    }
-    if (msg.finished) return finish(ses.final)
-    show(ses.final, partial)
-  }
-  ses.ws.onerror = () => fail('Verbindung fehlgeschlagen')
+  ses.conn = p.connect(key, {
+    text: (final, partial) => { if (s === ses) { ses.final = final; show(final, partial) } },
+    done: (final) => s === ses && finish(final),
+    error: (msg) => fail(ses, `${p.label}: ${msg}`),
+  })
 
   try {
     ses.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } })
   } catch (e) {
-    return fail('Kein Mikrofonzugriff')
+    return fail(ses, 'Kein Mikrofonzugriff')
   }
   if (s !== ses) return ses.stream.getTracks().forEach((t) => t.stop()) // cancelled meanwhile
-  ses.ctx = new AudioContext({ sampleRate: RATE })
+  ses.ctx = new AudioContext({ sampleRate: p.rate })
   await ses.ctx.audioWorklet.addModule(worklet)
   const node = new AudioWorkletNode(ses.ctx, 'tap')
   node.port.onmessage = ({ data }) => {
@@ -150,22 +131,20 @@ async function start() {
     const target = Math.min(1, rms * 12)
     ses.level = target > ses.level ? target : ses.level * 0.85 + target * 0.15
     setLevel(ses.level)
-    ses.queue ? ses.queue.push(data.buffer) : ses.ws.readyState === 1 && ses.ws.send(data.buffer)
+    ses.conn.audio(data)
   }
   ses.ctx.createMediaStreamSource(ses.stream).connect(node)
 }
 
 function stop() {
   if (!s || s.stopping) return
-  s.stopping = true
+  const ses = s
+  ses.stopping = true
   document.body.classList.add('busy')
   setLevel(0)
-  s.stream?.getTracks().forEach((t) => t.stop())
-  if (s.ws.readyState === 1 && !s.queue) {
-    s.ws.send('') // empty frame = end of audio; server flushes and replies with finished:true
-    const ses = s
-    setTimeout(() => s === ses && finish(ses.final), 5000) // safety net
-  } else finish('')
+  ses.stream?.getTracks().forEach((t) => t.stop())
+  ses.conn.end()
+  setTimeout(() => s === ses && finish(ses.final), 5000) // safety net
 }
 
 api.on('start', start)

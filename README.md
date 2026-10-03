@@ -12,7 +12,8 @@ Press a shortcut, talk, hit <kbd>Enter</kbd>. Your words appear live in a small 
 
 Tools like Wispr Flow or Superwhisper are great, but they're closed source and cost $10–15 a month. Diktat does the core job in roughly 300 lines of plain JavaScript you can read in ten minutes:
 
-- **Cheap.** Uses [Soniox](https://soniox.com) real-time speech-to-text at **$0.12 per hour of audio**. Dictating an hour every day costs about $4 a month.
+- **Cheap.** Defaults to [Soniox](https://soniox.com) real-time speech-to-text at **$0.12 per hour of audio**. Dictating an hour every day costs about $4 a month.
+- **Your choice of provider.** Soniox, ElevenLabs or OpenAI. Switch from the menu bar.
 - **Live.** You see words while you speak, not after a long upload.
 - **Multilingual.** Mixed German and English (or any of 60+ languages) in the same sentence works.
 - **Private by design.** No account, no telemetry, no server of ours. Audio goes straight from your Mac to the speech provider.
@@ -59,8 +60,8 @@ Build your own `.dmg` files (arm64 and x64) into `dist/` with `pnpm dist`.
 
 ## Setup
 
-1. **Get an API key** at [console.soniox.com](https://console.soniox.com).
-2. **Paste it** into the window that opens on first launch. You can change it later via menu bar 🎙 → *API-Key…*.
+1. **Pick a provider** and get an API key (see [Providers](#providers)).
+2. **Paste it** into the window that opens on first launch. You can change it later via menu bar 🎙 → *API-Keys…*.
 3. **Grant permissions** when macOS asks, or later under *System Settings → Privacy & Security*:
    - **Microphone**: to hear you.
    - **Accessibility**: to press <kbd>⌘</kbd><kbd>V</kbd> for you. Without it, the transcript still ends up in your clipboard.
@@ -77,13 +78,25 @@ Build your own `.dmg` files (arm64 and x64) into `dist/` with `pnpm dist`.
 
 While the bubble is open, <kbd>Enter</kbd> and <kbd>Esc</kbd> are captured system-wide, so they won't reach the app behind it.
 
+## Providers
+
+| Provider | Model | Price | Get a key |
+|---|---|---|---|
+| **Soniox** (default) | `stt-rt-v5` | $0.12 / hour | [console.soniox.com](https://console.soniox.com) |
+| **ElevenLabs** | `scribe_v2_realtime` | $0.39 / hour | [elevenlabs.io](https://elevenlabs.io/app/settings/api-keys) |
+| **OpenAI** | `gpt-live-transcribe` | $1.02 / hour | [platform.openai.com](https://platform.openai.com/api-keys) |
+
+Switch any time via menu bar 🎙 → *Provider*. Keys are stored per provider. Prices are pay-as-you-go list prices at the time of writing.
+
+Adding a provider is one object in `providers.js` with a `connect(key, on)` function: stream audio in, call `on.text()` / `on.done()` / `on.error()`.
+
 ## How it works
 
 ```
  ⌘⇧Space ──▶ main.js ──show──▶ pill.html (floating, never takes focus)
                                    │  getUserMedia → AudioWorklet (16 kHz Float32)
                                    ▼
-                         wss://stt-rt.soniox.com  ──tokens──▶ live text
+                  providers.js → Soniox / ElevenLabs / OpenAI ──▶ live text
  Enter ─────▶ main.js ◀──final text── pill.html
                  │
                  └─ clipboard ← text, osascript ⌘V, clipboard ← previous contents
@@ -94,8 +107,9 @@ The bubble window is created with `focusable: false`, so the app you were typing
 | File | Purpose |
 |---|---|
 | `main.js` | Shortcuts, menu-bar icon, window placement, key storage, paste |
-| `pill.html` | Bubble UI, microphone capture, Soniox WebSocket streaming |
-| `settings.html` | API key input |
+| `pill.html` | Bubble UI, microphone capture |
+| `providers.js` | One WebSocket adapter per speech-to-text provider |
+| `settings.html` | Provider and API key input |
 | `preload.js` | Minimal IPC bridge |
 
 ## Configuration
@@ -105,13 +119,13 @@ There's no settings UI beyond the API key yet. Edit the constants directly:
 | What | Where |
 |---|---|
 | Shortcut | `SHORTCUT` in `main.js` ([accelerator syntax](https://www.electronjs.org/docs/latest/api/accelerator)) |
-| Languages | `language_hints` in `pill.html` (default `['de', 'en']`) |
-| Model | `model` in `pill.html` (default `stt-rt-v5`) |
+| Languages (Soniox) | `LANGUAGES` in `providers.js` (default `['de', 'en']`). ElevenLabs and OpenAI auto-detect. |
+| Models | `model` / `model_id` per provider in `providers.js` |
 
 ## Privacy
 
-- Audio is streamed **only while the bubble is visible**, and only to Soniox ([policies](https://soniox.com/policies)).
-- Nothing is stored on disk except your encrypted API key in `~/Library/Application Support/Diktat/` (`diktat/` when run from source).
+- Audio is streamed **only while the bubble is visible**, and only to the provider you picked ([Soniox](https://soniox.com/policies), [ElevenLabs](https://elevenlabs.io/privacy-policy), [OpenAI](https://openai.com/policies/privacy-policy)).
+- Nothing is stored on disk except your encrypted API keys in `~/Library/Application Support/Diktat/` (`diktat/` when run from source).
 - No analytics, no update pings, no third-party scripts.
 
 ## Troubleshooting
@@ -120,14 +134,14 @@ There's no settings UI beyond the API key yet. Edit the constants directly:
 |---|---|
 | Text isn't pasted | Grant **Accessibility** to Diktat / Electron, then restart the app. The text is in your clipboard meanwhile. |
 | "Kein Mikrofonzugriff" | Grant **Microphone** permission. |
-| "Incorrect API key" | Re-enter the key via 🎙 → *API-Key…*. |
+| "Incorrect API key" / "Invalid API key" | Re-enter the key via 🎙 → *API-Keys…*. |
 | Shortcut does nothing | Another app owns <kbd>⌘</kbd><kbd>⇧</kbd><kbd>Space</kbd>. Change `SHORTCUT` in `main.js`. |
 
 ## Roadmap
 
 Ideas, not promises. PRs are welcome:
 
-- [ ] More providers (ElevenLabs Scribe, OpenAI `gpt-4o-transcribe`, Deepgram)
+- [ ] More providers (Deepgram, AssemblyAI)
 - [ ] Settings UI for shortcut, languages and provider
 - [ ] Optional LLM clean-up pass (remove filler words, fix punctuation)
 - [ ] Push-to-talk (hold to speak)

@@ -1,15 +1,30 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>Diktat – API-Key</title>
+<title>Diktat – Einstellungen</title>
 <style>
   body { font: 14px -apple-system, sans-serif; padding: 20px; color-scheme: light dark; }
-  input { width: 100%; box-sizing: border-box; padding: 8px; margin: 8px 0 12px; }
+  label { display: block; margin-bottom: 6px; }
+  input, select { width: 100%; box-sizing: border-box; padding: 8px; margin-bottom: 14px; }
 </style>
-<label>Soniox API-Key (<a href="https://console.soniox.com" target="_blank">console.soniox.com</a>)</label>
+<label for="provider">Provider</label>
+<select id="provider"></select>
+<label for="key">API-Key (<a id="link" target="_blank">hier holen</a>)</label>
 <input id="key" type="password" autofocus>
 <button id="save">Speichern</button>
+<script src="providers.js"></script>
 <script>
-  api.getKey().then((k) => (key.value = k))
-  save.onclick = () => key.value.trim() && api.setKey(key.value)
+  let keys = {}
+  const select = (id) => {
+    provider.value = id
+    key.value = keys[id] || ''
+    link.href = PROVIDERS[id].keyUrl
+  }
+  api.getSettings().then((c) => {
+    keys = c.keys
+    provider.innerHTML = Object.entries(PROVIDERS).map(([id, p]) => `<option value="${id}">${p.label}</option>`).join('')
+    select(c.provider)
+  })
+  provider.onchange = () => select(provider.value)
+  save.onclick = () => key.value.trim() && api.saveSettings(provider.value, key.value)
   key.onkeydown = (e) => { if (e.key === 'Enter') save.click() }
 </script>

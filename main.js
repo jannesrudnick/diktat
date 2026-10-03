@@ -6,9 +6,18 @@ const path = require('path')
 const SHORTCUT = 'CommandOrControl+Shift+Space'
 const SIZE = { width: 600, height: 180 } // transparent canvas for card + dock; click-through outside them
 
-const keyFile = () => path.join(app.getPath('userData'), 'key.bin')
-const loadKey = () => { try { return safeStorage.decryptString(fs.readFileSync(keyFile())) } catch { return '' } }
-const saveKey = (k) => fs.writeFileSync(keyFile(), safeStorage.encryptString(k.trim()))
+const PROVIDERS = { soniox: 'Soniox', elevenlabs: 'ElevenLabs', openai: 'OpenAI' } // implementations: providers.js
+
+// { provider, keys: { [provider]: apiKey } }, encrypted with the macOS Keychain.
+const configFile = () => path.join(app.getPath('userData'), 'config.bin')
+function loadConfig() {
+  try { return JSON.parse(safeStorage.decryptString(fs.readFileSync(configFile()))) } catch {}
+  // v0.1 stored a single Soniox key in key.bin
+  try { return { provider: 'soniox', keys: { soniox: safeStorage.decryptString(fs.readFileSync(path.join(app.getPath('userData'), 'key.bin'))) } } } catch {}
+  return { provider: 'soniox', keys: {} }
+}
+const saveConfig = (c) => fs.writeFileSync(configFile(), safeStorage.encryptString(JSON.stringify(c)))
+const activeKey = () => { const c = loadConfig(); return c.keys[c.provider] || '' }
 
 let pill, settings, tray, recording = false
 
@@ -40,7 +49,7 @@ function openSettings() {
 }
 
 function toggle() {
-  if (!loadKey()) return openSettings()
+  if (!activeKey()) return openSettings()
   if (recording) return pill.webContents.send('stop')
   recording = true
   place()
@@ -66,8 +75,22 @@ async function paste(text) {
   })
 }
 
-ipcMain.handle('get-key', loadKey)
-ipcMain.handle('set-key', (_, k) => { saveKey(k); settings?.close() })
+ipcMain.handle('get-config', () => { const c = loadConfig(); return { provider: c.provider, key: c.keys[c.provider] || '' } })
+ipcMain.handle('get-settings', () => ({ ...loadConfig(), providers: PROVIDERS }))
+ipcMain.handle('save-settings', (_, provider, key) => {
+  const c = loadConfig()
+  saveConfig({ provider, keys: { ...c.keys, [provider]: key.trim() } })
+  settings?.close()
+})
+// ElevenLabs realtime only accepts the API key as a header, which browser WebSockets can't send.
+ipcMain.handle('eleven-token', async () => {
+  const res = await fetch('https://api.elevenlabs.io/v1/single-use-token/realtime_scribe', {
+    method: 'POST', headers: { 'xi-api-key': loadConfig().keys.elevenlabs || '' },
+  })
+  const body = await res.json()
+  if (!res.ok) throw new Error(body.detail?.message || `HTTP ${res.status}`)
+  return body.token
+})
 ipcMain.on('done', (_, text) => {
   recording = false
   globalShortcut.unregister('Return')
@@ -88,7 +111,11 @@ app.whenReady().then(async () => {
   tray.setTitle('🎙')
   const menu = () => Menu.buildFromTemplate([
     { label: `Diktieren (${SHORTCUT}) – Enter fügt ein, Esc verwirft`, click: toggle },
-    { label: 'API-Key…', click: openSettings },
+    { label: 'Provider', submenu: Object.entries(PROVIDERS).map(([id, label]) => ({
+      label, type: 'radio', checked: loadConfig().provider === id,
+      click: () => { const c = loadConfig(); saveConfig({ ...c, provider: id }); if (!c.keys[id]) openSettings() },
+    })) },
+    { label: 'API-Keys…', click: openSettings },
     { label: 'Beim Login starten', type: 'checkbox', checked: app.getLoginItemSettings().openAtLogin,
       click: (i) => app.setLoginItemSettings({ openAtLogin: i.checked }) },
     { type: 'separator' },
@@ -96,7 +123,7 @@ app.whenReady().then(async () => {
   ])
   tray.on('click', () => tray.popUpContextMenu(menu()))
 
-  if (!loadKey()) openSettings()
+  if (!activeKey()) openSettings()
 })
 
 app.on('window-all-closed', (e) => e.preventDefault())
