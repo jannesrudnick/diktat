@@ -34,7 +34,7 @@ Tools like Wispr Flow or Superwhisper are great, but they're closed source and c
 Requires Node.js 20+ and [pnpm](https://pnpm.io).
 
 ```bash
-git clone <this-repo> diktat
+git clone https://github.com/jannesrudnick/diktat.git
 cd diktat
 pnpm install
 pnpm start
