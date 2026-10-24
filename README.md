@@ -25,6 +25,8 @@ Tools like Wispr Flow or Superwhisper are great, but they're closed source and c
 - Floating bubble with live transcript, recording timer and an audio-level animation
 - <kbd>Enter</kbd> inserts at the cursor, <kbd>Esc</kbd> discards
 - Restores your previous clipboard after pasting, images included
+- **Transcript history:** every transcript is logged, so nothing is lost if the paste lands in the wrong window. Tray icon → *Verlauf* lists the last ten (click to copy) and opens the log file
+- **System audio (optional):** tray icon → *Systemaudio mitschneiden (Calls)* transcribes what your computer plays (the other side of a call) together with your mic
 - Lives in the menu bar / system tray, and can launch at login (macOS, Windows)
 - API keys encrypted with the OS keychain (`safeStorage`: Keychain, DPAPI, libsecret)
 
@@ -96,6 +98,16 @@ pnpm start
 
 While the bubble is open, <kbd>Enter</kbd> and <kbd>Esc</kbd> are captured system-wide, so they won't reach the app behind it.
 
+Clicked somewhere else while dictating and the text went nowhere? Tray icon → *Verlauf* → click the entry to copy it again.
+
+### System audio
+
+Tray icon → *Systemaudio mitschneiden (Calls)* mixes your computer's audio output into the transcript, e.g. the other people in a call. Echo cancellation keeps your mic from picking up the same audio twice.
+
+- **macOS 14.2+:** asks for **Screen Recording** (and system audio) permission the first time. Diktat only uses the audio; the screen image is discarded immediately.
+- **Windows:** works out of the box.
+- **Linux:** depends on your audio stack (PulseAudio / PipeWire). If it's unavailable, the bubble says *Nur Mikrofon* and Diktat continues with the mic only.
+
 ## Providers
 
 | Provider | Model | Price | Get a key |
@@ -125,8 +137,8 @@ The bubble window is created with `focusable: false`, so the app you were typing
 
 | File | Purpose |
 |---|---|
-| `main.js` | Shortcuts, menu-bar icon, window placement, key storage, paste |
-| `pill.html` | Bubble UI, microphone capture |
+| `main.js` | Shortcuts, menu-bar icon, window placement, key storage, transcript history, paste |
+| `pill.html` | Bubble UI, microphone and system audio capture |
 | `providers.js` | One WebSocket adapter per speech-to-text provider |
 | `settings.html` | Provider and API key input |
 | `preload.js` | Minimal IPC bridge |
@@ -144,14 +156,14 @@ There's no settings UI beyond the API key yet. Edit the constants directly:
 ## Privacy
 
 - Audio is streamed **only while the bubble is visible**, and only to the provider you picked ([Soniox](https://soniox.com/policies), [ElevenLabs](https://elevenlabs.io/privacy-policy), [OpenAI](https://openai.com/policies/privacy-policy)).
-- Nothing is stored on disk except your encrypted API keys in the app's data folder (`~/Library/Application Support/Diktat` on macOS, `%APPDATA%\Diktat` on Windows, `~/.config/Diktat` on Linux; lowercase `diktat` when run from source). On Linux without a keyring, they're stored unencrypted.
+- Nothing is stored on disk except your encrypted API keys and the transcript history (`verlauf.txt`, plain text, delete it any time) in the app's data folder (`~/Library/Application Support/Diktat` on macOS, `%APPDATA%\Diktat` on Windows, `~/.config/Diktat` on Linux; lowercase `diktat` when run from source). On Linux without a keyring, they're stored unencrypted.
 - No analytics, no update pings, no third-party scripts.
 
 ## Troubleshooting
 
 | Problem | Fix |
 |---|---|
-| Text isn't pasted | **macOS:** grant **Accessibility** to Diktat / Electron, then restart the app. **Linux:** install `xdotool` / `wtype`. The text is in your clipboard meanwhile. |
+| Text isn't pasted | **macOS:** grant **Accessibility** to Diktat / Electron, then restart the app. **Linux:** install `xdotool` / `wtype`. The text is in your clipboard meanwhile, and always in 🎙 → *Verlauf*. |
 | "Kein Mikrofonzugriff" | Grant **Microphone** permission. |
 | "Incorrect API key" / "Invalid API key" | Re-enter the key via 🎙 → *API-Keys…*. |
 | Shortcut does nothing | Another app owns it. Change `SHORTCUT` in `main.js`. |

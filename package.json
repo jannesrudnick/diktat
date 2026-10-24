@@ -33,6 +33,7 @@
       "category": "public.app-category.productivity",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Diktat transkribiert deine Sprache.",
+        "NSAudioCaptureUsageDescription": "Diktat kann auf Wunsch das Systemaudio (z. B. einen Call) mittranskribieren.",
         "LSUIElement": true
       },
       "identity": "-",
