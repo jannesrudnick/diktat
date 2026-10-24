@@ -66,10 +66,11 @@ const worklet = URL.createObjectURL(new Blob([`
   })`], { type: 'text/javascript' }))
 
 let s = null // current session
+let hint = 'Sprich einfach …'
 
 const esc = (t) => t.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c])
 const show = (final, partial) => {
-  text.innerHTML = final || partial ? `<span>${esc(final)}<i>${esc(partial)}</i></span>` : '<span class="hint">Sprich einfach …</span>'
+  text.innerHTML = final || partial ? `<span>${esc(final)}<i>${esc(partial)}</i></span>` : `<span class="hint">${hint}</span>`
 }
 
 function setLevel(level) {
@@ -81,6 +82,7 @@ function finish(result) {
   if (!s) return
   clearInterval(s.timer)
   s.stream?.getTracks().forEach((t) => t.stop())
+  s.system?.getTracks().forEach((t) => t.stop())
   s.ctx?.close()
   s.conn.close()
   s = null
@@ -96,10 +98,23 @@ function fail(ses, msg) {
   setTimeout(() => s === ses && finish(''), 3000)
 }
 
+// System audio (the other side of a call) via loopback capture. Optional: falls back to mic only.
+async function systemAudio() {
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+    stream.getVideoTracks().forEach((t) => t.stop())
+    if (stream.getAudioTracks().length) return stream
+  } catch (e) {
+    console.warn('System audio unavailable', e)
+  }
+  hint = 'Nur Mikrofon – Systemaudio nicht verfügbar'
+}
+
 async function start() {
-  const { provider, key } = await api.getConfig()
+  const { provider, key, systemAudio: withSystem } = await api.getConfig()
   const p = PROVIDERS[provider]
   const ses = (s = { final: '', level: 0 })
+  hint = withSystem ? 'Sprich einfach … (Mikrofon + Systemaudio)' : 'Sprich einfach …'
   const t0 = Date.now()
   const tick = () => {
     const sec = Math.floor((Date.now() - t0) / 1000)
@@ -115,15 +130,21 @@ async function start() {
     error: (msg) => fail(ses, `${p.label}: ${msg}`),
   })
 
+  // In parallel with the mic, while the user activation main started us with is still fresh.
+  const system = withSystem ? systemAudio() : null
   try {
     ses.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } })
   } catch (e) {
+    system?.then((st) => st?.getTracks().forEach((t) => t.stop()))
     return fail(ses, 'Kein Mikrofonzugriff')
   }
-  if (s !== ses) return ses.stream.getTracks().forEach((t) => t.stop()) // cancelled meanwhile
+  ses.system = await system
+  if (s === ses && text.querySelector('.hint')) show('', '') // hint may have changed
+  if (s !== ses || ses.stopping) return [ses.stream, ses.system].forEach((st) => st?.getTracks().forEach((t) => t.stop())) // cancelled meanwhile
   ses.ctx = new AudioContext({ sampleRate: p.rate })
   await ses.ctx.audioWorklet.addModule(worklet)
-  const node = new AudioWorkletNode(ses.ctx, 'tap')
+  // Mic and system audio are mixed down to one mono channel.
+  const node = new AudioWorkletNode(ses.ctx, 'tap', { channelCount: 1, channelCountMode: 'explicit' })
   node.port.onmessage = ({ data }) => {
     if (ses.stopping) return
     // RMS → 0..1 with fast attack / slow release so the animation feels alive but not jittery.
@@ -134,6 +155,7 @@ async function start() {
     ses.conn.audio(data)
   }
   ses.ctx.createMediaStreamSource(ses.stream).connect(node)
+  if (ses.system) ses.ctx.createMediaStreamSource(ses.system).connect(node)
 }
 
 function stop() {
