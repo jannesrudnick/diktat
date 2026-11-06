@@ -42,15 +42,25 @@ function place() {
   pill.setBounds({ width, height, x: Math.round(workArea.x + (workArea.width - width) / 2), y: workArea.y + workArea.height - height - 8 })
 }
 
+// Join every Space, including fullscreen apps, above their content. macOS drops this after hide(),
+// so it's reapplied before every show. skipTransformProcessType: we're a UI element (no dock icon) anyway,
+// so don't let Electron flip the process type (which makes the dock icon flash).
+function floatOverEverything() {
+  pill.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
+  pill.setAlwaysOnTop(true, 'screen-saver', 1)
+}
+
 function createPill() {
   pill = new BrowserWindow({
     ...SIZE, frame: false, transparent: true, resizable: false, focusable: false, hasShadow: false,
+    // macOS: a fullscreenable window gets FullScreenPrimary, which conflicts with the FullScreenAuxiliary
+    // behavior needed to float over other apps' fullscreen spaces.
+    fullscreenable: false,
     // macOS: a non-activating panel, so clicking "Einfügen" doesn't pull focus away from the target app.
     ...(process.platform === 'darwin' && { type: 'panel' }),
     skipTaskbar: true, show: false, webPreferences: { preload: path.join(__dirname, 'preload.js') },
   })
-  pill.setAlwaysOnTop(true, 'screen-saver')
-  pill.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  floatOverEverything()
   // Linux can't forward mouse moves through ignored windows, so hover would never re-enable clicks there.
   if (process.platform !== 'linux') pill.setIgnoreMouseEvents(true, { forward: true })
   pill.loadFile('pill.html')
@@ -71,6 +81,7 @@ function toggle() {
   if (recording) return pill.webContents.send('stop')
   recording = true
   place()
+  floatOverEverything()
   pill.showInactive()
   // Only while recording: Enter inserts, Esc discards (swallowed system-wide meanwhile).
   globalShortcut.register('Return', () => pill.webContents.send('stop'))
