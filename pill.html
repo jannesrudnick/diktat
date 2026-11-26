@@ -10,7 +10,8 @@
     font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif; -webkit-font-smoothing: antialiased; color: #f4f4f5;
   }
   .surface {
-    background: rgb(9 9 11 / .92); border: 1px solid rgb(255 255 255 / .1); backdrop-filter: blur(24px);
+    /* Opaque: backdrop-filter has nothing to blur in a transparent Electron window, so translucency just looks see-through. */
+    background: rgb(9 9 11); border: 1px solid rgb(255 255 255 / .1);
     box-shadow: 0 12px 40px -8px rgb(0 0 0 / .55), 0 0 0 1px rgb(0 0 0 / .4);
   }
   #card {
@@ -240,8 +241,12 @@ let drag = null
 grip.onpointerdown = (e) => { drag = { x: e.screenX, y: e.screenY }; grip.setPointerCapture(e.pointerId) }
 grip.onpointermove = (e) => {
   if (!drag) return
-  api.move(e.screenX - drag.x, e.screenY - drag.y)
-  drag = { x: e.screenX, y: e.screenY }
+  // Pointer coordinates are fractional; setPosition only takes integers. Keep the remainder for the next move.
+  const dx = Math.round(e.screenX - drag.x), dy = Math.round(e.screenY - drag.y)
+  if (!dx && !dy) return
+  api.move(dx, dy)
+  drag.x += dx
+  drag.y += dy
 }
 grip.onpointerup = grip.onpointercancel = () => { if (drag) api.moved(); drag = null }
 
