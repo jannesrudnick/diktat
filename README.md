@@ -2,7 +2,7 @@
 
 **Realtime voice dictation for macOS, Windows and Linux, in any app. Bring your own API key, pay about a dime per hour.**
 
-Press a shortcut, talk, hit <kbd>Enter</kbd>. Your words appear live in a small floating bubble and get pasted wherever your cursor is: Slack, your editor, the browser, a terminal.
+Press a shortcut, talk, press it again. Your words appear live in a small floating bubble and get pasted wherever your cursor is: Slack, your editor, the browser, a terminal.
 
 <p align="center">
   <img src="docs/screenshot.png" alt="Diktat floating bubble showing a live transcript" width="600">
@@ -23,8 +23,7 @@ Tools like Wispr Flow or Superwhisper are great, but they're closed source and c
 
 - Global shortcut (<kbd>⌘</kbd><kbd>⇧</kbd><kbd>Space</kbd>, <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Space</kbd> on Windows/Linux) from anywhere
 - Floating bubble with live transcript, recording timer and an audio-level animation
-- <kbd>Enter</kbd> inserts at the cursor, <kbd>Esc</kbd> discards
-- Restores your previous clipboard after pasting, images included
+- **Pause** and **Stopp** in the bubble. Stop always saves, pastes at the cursor and leaves the text in the clipboard
 - **Transcript history:** every transcript is logged, so nothing is lost if the paste lands in the wrong window. Tray icon → *Verlauf* lists the last ten (click to copy) and opens the log file
 - **System audio (optional):** tray icon → *Systemaudio mitschneiden (Calls)* transcribes what your computer plays (the other side of a call) together with your mic
 - Lives in the menu bar / system tray, and can launch at login (macOS, Windows)
@@ -93,18 +92,18 @@ pnpm start
 | Action | Key |
 |---|---|
 | Start dictating | <kbd>⌘</kbd><kbd>⇧</kbd><kbd>Space</kbd> (macOS) · <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Space</kbd> (Windows/Linux) |
-| Stop and paste at the cursor | <kbd>Enter</kbd> (or the shortcut again, or click **Einfügen**) |
-| Discard | <kbd>Esc</kbd> (or click ✕) |
+| Pause / resume | click ⏸ in the bubble |
+| Stop, save, paste at the cursor and copy | the shortcut again, or click **Stopp** |
 
-While the bubble is open, <kbd>Enter</kbd> and <kbd>Esc</kbd> are captured system-wide, so they won't reach the app behind it.
+Drag the bubble by the dots on its left; it remembers where you put it.
 
 Clicked somewhere else while dictating and the text went nowhere? Tray icon → *Verlauf* → click the entry to copy it again.
 
 ### System audio
 
-Tray icon → *Systemaudio mitschneiden (Calls)* mixes your computer's audio output into the transcript, e.g. the other people in a call. Echo cancellation keeps your mic from picking up the same audio twice.
+Tray icon → *Systemaudio mitschneiden (Calls)* also transcribes your computer's audio output, e.g. the other people in a call. Mic and system audio are transcribed as separate tracks (two provider connections, so twice the cost) and merged into one transcript with `Ich:` / `System:` turns. Use headphones, otherwise the mic picks up the speakers too.
 
-- **macOS 14.2+:** asks for **Screen Recording** (and system audio) permission the first time. Diktat only uses the audio; the screen image is discarded immediately.
+- **macOS 14.2+:** asks once for *System Audio Recording* permission (no Screen Recording needed). Builds are ad-hoc signed, so after installing a new build run `tccutil reset AudioCapture dev.diktat.app` and allow it again.
 - **Windows:** works out of the box.
 - **Linux:** depends on your audio stack (PulseAudio / PipeWire). If it's unavailable, the bubble says *Nur Mikrofon* and Diktat continues with the mic only.
 
@@ -127,9 +126,9 @@ Adding a provider is one object in `providers.js` with a `connect(key, on)` func
                                    │  getUserMedia → AudioWorklet (16 kHz Float32)
                                    ▼
                   providers.js → Soniox / ElevenLabs / OpenAI ──▶ live text
- Enter ─────▶ main.js ◀──final text── pill.html
+ Stopp ─────▶ main.js ◀──final text── pill.html
                  │
-                 └─ clipboard ← text, simulated paste, clipboard ← previous contents
+                 └─ history log, clipboard ← text, simulated paste
                     (osascript on macOS, PowerShell SendKeys on Windows, xdotool/wtype on Linux)
 ```
 

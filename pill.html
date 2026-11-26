@@ -10,7 +10,8 @@
     font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif; -webkit-font-smoothing: antialiased; color: #f4f4f5;
   }
   .surface {
-    background: rgb(9 9 11 / .92); border: 1px solid rgb(255 255 255 / .1); backdrop-filter: blur(24px);
+    /* Opaque: backdrop-filter has nothing to blur in a transparent Electron window, so translucency just looks see-through. */
+    background: rgb(9 9 11); border: 1px solid rgb(255 255 255 / .1);
     box-shadow: 0 12px 40px -8px rgb(0 0 0 / .55), 0 0 0 1px rgb(0 0 0 / .4);
   }
   #card {
@@ -21,8 +22,12 @@
   #text i { color: #a1a1aa; }
   #text .hint { color: #71717a; }
   #text .err { color: #fca5a5; }
+  #text b { font-weight: 600; color: #a1a1aa; }
+  #grip { display: flex; align-items: center; height: 32px; padding: 0 2px 0 4px; color: #52525b; cursor: grab; touch-action: none; }
+  #grip:hover { color: #a1a1aa; }
+  #grip:active { cursor: grabbing; }
   #dock { display: flex; align-items: center; gap: 4px; border-radius: 999px; padding: 6px; animation: in .15s ease-out; }
-  .rec { display: flex; align-items: center; gap: 14px; padding: 0 4px 0 12px; }
+  .rec { display: flex; align-items: center; gap: 14px; padding: 0 4px 0 6px; }
   #dot {
     width: 10px; height: 10px; border-radius: 50%; background: var(--recording);
     box-shadow: 0 0 0 calc(3px + var(--level) * 7px) color-mix(in oklch, var(--recording) 25%, transparent);
@@ -37,29 +42,37 @@
     height: 32px; border-radius: 999px; transition: background .15s, transform .1s;
   }
   button:active { transform: scale(.98); }
-  #cancel { width: 32px; justify-content: center; background: transparent; color: #a1a1aa; }
-  #cancel:hover { background: rgb(255 255 255 / .1); color: #fff; }
-  #insert { background: #fff; color: #09090b; font-weight: 500; padding: 0 12px; margin-left: 2px; }
-  #insert:hover { background: #e4e4e7; }
-  kbd { font: 11px ui-monospace, monospace; opacity: .55; }
-  .busy #insert, .busy #cancel { opacity: .5; pointer-events: none; }
+  #pause { width: 32px; justify-content: center; background: transparent; color: #a1a1aa; }
+  #pause:hover { background: rgb(255 255 255 / .1); color: #fff; }
+  #pause .play, .paused #pause .bars { display: none; }
+  .paused #pause .play { display: block; }
+  .paused #dot { background: #71717a; box-shadow: none; }
+  #stop { background: #fff; color: #09090b; font-weight: 500; padding: 0 12px; margin-left: 2px; }
+  #stop:hover { background: #e4e4e7; }
+  .busy #stop, .busy #pause { opacity: .5; pointer-events: none; }
   @keyframes in { from { opacity: 0; transform: translateY(4px) } }
 </style>
 <div id="card" class="surface"><p id="text"></p></div>
 <div id="dock" class="surface">
+  <div id="grip" title="Verschieben">
+    <svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor"><circle cx="2" cy="3" r="1.5"/><circle cx="8" cy="3" r="1.5"/><circle cx="2" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="2" cy="13" r="1.5"/><circle cx="8" cy="13" r="1.5"/></svg>
+  </div>
   <div class="rec"><span id="dot"></span><span id="timer">00:00</span></div>
   <div id="bars"><span></span><span></span><span></span><span></span><span></span></div>
   <span class="divider"></span>
-  <button id="cancel" title="Verwerfen (Esc)">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+  <button id="pause" title="Pause / Weiter">
+    <svg class="bars" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+    <svg class="play" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l11-6.5a1 1 0 0 0 0-1.72l-11-6.5A1 1 0 0 0 8 5.5Z"/></svg>
   </button>
-  <button id="insert" title="Einfügen (Enter)">Einfügen <kbd>⏎</kbd></button>
+  <button id="stop" title="Stopp: speichern, einfügen, in die Zwischenablage (⌘⇧Space)">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>Stopp
+  </button>
 </div>
 <script src="providers.js"></script>
 <script>
 const BAR_WEIGHTS = [0.35, 0.7, 1, 0.7, 0.35]
 
-// AudioWorklet that forwards raw Float32 mic samples to the main thread.
+// AudioWorklet that forwards raw Float32 samples to the main thread.
 const worklet = URL.createObjectURL(new Blob([`
   registerProcessor('tap', class extends AudioWorkletProcessor {
     process([input]) { if (input[0]) this.port.postMessage(input[0].slice()); return true }
@@ -69,8 +82,49 @@ let s = null // current session
 let hint = 'Sprich einfach …'
 
 const esc = (t) => t.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c])
-const show = (final, partial) => {
-  text.innerHTML = final || partial ? `<span>${esc(final)}<i>${esc(partial)}</i></span>` : `<span class="hint">${hint}</span>`
+
+// Mic and system audio are transcribed as separate tracks (one provider connection each).
+// Every newly finalized piece of a track becomes a timestamped segment, so the tracks can be
+// interleaved in speaking order (by finalization time) into one transcript with speaker turns.
+function onFinal(ses, tr, final) {
+  if (final === tr.final) return
+  if (final.startsWith(tr.final)) ses.segs.push({ at: Date.now(), tr, text: final.slice(tr.final.length) })
+  else { // provider rewrote earlier text: collapse this track into one segment at its first position
+    const at = ses.segs.find((g) => g.tr === tr)?.at ?? Date.now()
+    ses.segs = ses.segs.filter((g) => g.tr !== tr).concat({ at, tr, text: final }).sort((a, b) => a.at - b.at)
+  }
+  tr.final = final
+}
+
+// Consecutive segments of the same track, joined: [{ tr, text }].
+function turns(ses) {
+  const out = []
+  for (const g of ses.segs) {
+    if (!g.text.trim()) continue
+    const last = out.at(-1)
+    last?.tr === g.tr ? (last.text = join(last.text, g.text)) : out.push({ tr: g.tr, text: g.text })
+  }
+  return out
+}
+
+// Speaker labels only once both tracks actually said something; otherwise plain text as before.
+function transcript(ses) {
+  const ts = turns(ses)
+  if (new Set(ts.map((t) => t.tr)).size < 2) return ts[0]?.tr.final ?? ''
+  return ts.map((t) => `${t.tr.label}: ${t.text.trim()}`).join('\n')
+}
+
+function render(ses) {
+  const ts = turns(ses)
+  const labelled = new Set([...ts.map((t) => t.tr), ...ses.tracks.filter((t) => t.partial)]).size > 1
+  const lines = ts.map((t) => ({ tr: t.tr, html: esc(t.text.trim()) }))
+  for (const tr of ses.tracks.filter((t) => t.partial)) {
+    const last = lines.at(-1)
+    last?.tr === tr ? (last.html += ` <i>${esc(tr.partial.trim())}</i>`) : lines.push({ tr, html: `<i>${esc(tr.partial.trim())}</i>` })
+  }
+  text.innerHTML = lines.length
+    ? `<span>${lines.map((l) => (labelled ? `<b>${l.tr.label}:</b> ` : '') + l.html).join('<br>')}</span>`
+    : `<span class="hint">${hint}</span>`
 }
 
 function setLevel(level) {
@@ -80,22 +134,23 @@ function setLevel(level) {
 
 function finish(result) {
   if (!s) return
-  clearInterval(s.timer)
-  s.stream?.getTracks().forEach((t) => t.stop())
-  s.system?.getTracks().forEach((t) => t.stop())
-  s.ctx?.close()
-  s.conn.close()
+  const ses = s
+  clearInterval(ses.timer)
+  ses.stream?.getTracks().forEach((t) => t.stop())
+  ses.system?.getTracks().forEach((t) => t.stop())
+  ses.ctx?.close()
+  ses.tracks.forEach((t) => t.conn.close())
   s = null
-  document.body.classList.remove('busy')
+  document.body.classList.remove('busy', 'paused')
   setLevel(0)
   api.done(result.trim())
 }
 
 function fail(ses, msg) {
   if (s !== ses) return
-  if (ses.stopping) return finish(ses.final) // keep what we have
+  if (ses.stopping) return finish(transcript(ses)) // keep what we have
   text.innerHTML = `<span class="err">⚠ ${esc(msg)}</span>`
-  setTimeout(() => s === ses && finish(''), 3000)
+  setTimeout(() => s === ses && finish(transcript(ses)), 3000) // whatever arrived before the error is still saved
 }
 
 // System audio (the other side of a call) via loopback capture. Optional: falls back to mic only.
@@ -113,22 +168,29 @@ async function systemAudio() {
 async function start() {
   const { provider, key, systemAudio: withSystem } = await api.getConfig()
   const p = PROVIDERS[provider]
-  const ses = (s = { final: '', level: 0 })
+  const ses = (s = { tracks: [], segs: [] })
   hint = withSystem ? 'Sprich einfach … (Mikrofon + Systemaudio)' : 'Sprich einfach …'
-  const t0 = Date.now()
+  ses.t0 = Date.now()
   const tick = () => {
-    const sec = Math.floor((Date.now() - t0) / 1000)
+    const sec = Math.floor(((ses.pausedAt ?? Date.now()) - ses.t0) / 1000)
     timer.textContent = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`
   }
   tick()
   ses.timer = setInterval(tick, 250)
-  show('', '')
+  render(ses)
 
-  ses.conn = p.connect(key, {
-    text: (final, partial) => { if (s === ses) { ses.final = final; show(final, partial) } },
-    done: (final) => s === ses && finish(final),
-    error: (msg) => fail(ses, `${p.label}: ${msg}`),
-  })
+  const allDone = () => ses.tracks.every((t) => t.done) && finish(transcript(ses))
+  const track = (label, onError) => {
+    const tr = { label, final: '', partial: '', done: false, level: 0 }
+    tr.conn = p.connect(key, {
+      text: (final, partial) => { if (s === ses) { onFinal(ses, tr, final); tr.partial = partial; render(ses) } },
+      done: (final) => { if (s === ses) { onFinal(ses, tr, final); tr.partial = ''; tr.done = true; allDone() } },
+      error: (msg) => s === ses && onError(msg, tr),
+    })
+    ses.tracks.push(tr)
+    return tr
+  }
+  const mic = track('Ich', (msg) => fail(ses, `${p.label}: ${msg}`))
 
   // In parallel with the mic, while the user activation main started us with is still fresh.
   const system = withSystem ? systemAudio() : null
@@ -139,23 +201,28 @@ async function start() {
     return fail(ses, 'Kein Mikrofonzugriff')
   }
   ses.system = await system
-  if (s === ses && text.querySelector('.hint')) show('', '') // hint may have changed
+  if (s === ses) render(ses) // hint may have changed
   if (s !== ses || ses.stopping) return [ses.stream, ses.system].forEach((st) => st?.getTracks().forEach((t) => t.stop())) // cancelled meanwhile
   ses.ctx = new AudioContext({ sampleRate: p.rate })
   await ses.ctx.audioWorklet.addModule(worklet)
-  // Mic and system audio are mixed down to one mono channel.
-  const node = new AudioWorkletNode(ses.ctx, 'tap', { channelCount: 1, channelCountMode: 'explicit' })
-  node.port.onmessage = ({ data }) => {
-    if (ses.stopping) return
-    // RMS → 0..1 with fast attack / slow release so the animation feels alive but not jittery.
-    const rms = Math.sqrt(data.reduce((a, v) => a + v * v, 0) / data.length)
-    const target = Math.min(1, rms * 12)
-    ses.level = target > ses.level ? target : ses.level * 0.85 + target * 0.15
-    setLevel(ses.level)
-    ses.conn.audio(data)
+  const feed = (stream, tr) => {
+    const node = new AudioWorkletNode(ses.ctx, 'tap', { channelCount: 1, channelCountMode: 'explicit' })
+    node.port.onmessage = ({ data }) => {
+      if (ses.stopping || tr.done) return
+      // Paused: keep the connection alive with silence (providers drop idle sockets).
+      if (ses.pausedAt) return (tr.level = 0), setLevel(0), tr.conn.audio(new Float32Array(data.length))
+      // RMS → 0..1 with fast attack / slow release so the animation feels alive but not jittery.
+      const rms = Math.sqrt(data.reduce((a, v) => a + v * v, 0) / data.length)
+      const target = Math.min(1, rms * 12)
+      tr.level = target > tr.level ? target : tr.level * 0.85 + target * 0.15
+      setLevel(Math.max(...ses.tracks.map((t) => t.level)))
+      tr.conn.audio(data)
+    }
+    ses.ctx.createMediaStreamSource(stream).connect(node)
   }
-  ses.ctx.createMediaStreamSource(ses.stream).connect(node)
-  if (ses.system) ses.ctx.createMediaStreamSource(ses.system).connect(node)
+  feed(ses.stream, mic)
+  // A failing system track is dropped; the mic keeps going.
+  if (ses.system) feed(ses.system, track('System', (msg, tr) => { console.warn('System track:', msg); tr.conn.close(); tr.done = true; if (ses.stopping) allDone() }))
 }
 
 function stop() {
@@ -165,19 +232,41 @@ function stop() {
   document.body.classList.add('busy')
   setLevel(0)
   ses.stream?.getTracks().forEach((t) => t.stop())
-  ses.conn.end()
-  setTimeout(() => s === ses && finish(ses.final), 5000) // safety net
+  ses.system?.getTracks().forEach((t) => t.stop())
+  ses.tracks.forEach((t) => t.done || t.conn.end())
+  setTimeout(() => s === ses && finish(transcript(ses)), 5000) // safety net
+}
+
+function togglePause() {
+  if (!s || s.stopping) return
+  const ses = s
+  if (ses.pausedAt) { ses.t0 += Date.now() - ses.pausedAt; ses.pausedAt = null }
+  else ses.pausedAt = Date.now()
+  document.body.classList.toggle('paused', Boolean(ses.pausedAt))
 }
 
 api.on('start', start)
 api.on('stop', stop)
-api.on('cancel', () => finish(''))
-insert.onclick = stop
-cancel.onclick = () => finish('')
+document.getElementById('stop').onclick = stop // `stop` the global is the function, not the button
+pause.onclick = togglePause
+
+// Drag handle: pointer capture keeps the events coming while the window follows the cursor.
+let drag = null
+grip.onpointerdown = (e) => { drag = { x: e.screenX, y: e.screenY }; grip.setPointerCapture(e.pointerId) }
+grip.onpointermove = (e) => {
+  if (!drag) return
+  // Pointer coordinates are fractional; setPosition only takes integers. Keep the remainder for the next move.
+  const dx = Math.round(e.screenX - drag.x), dy = Math.round(e.screenY - drag.y)
+  if (!dx && !dy) return
+  api.move(dx, dy)
+  drag.x += dx
+  drag.y += dy
+}
+grip.onpointerup = grip.onpointercancel = () => { if (drag) api.moved(); drag = null }
 
 // Window is click-through except over the card/dock.
 for (const el of [card, dock]) {
   el.onmouseenter = () => api.mouse(true)
-  el.onmouseleave = () => api.mouse(false)
+  el.onmouseleave = () => drag || api.mouse(false)
 }
 </script>

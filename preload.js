@@ -7,5 +7,7 @@ contextBridge.exposeInMainWorld('api', {
   elevenToken: () => ipcRenderer.invoke('eleven-token'),
   done: (text) => ipcRenderer.send('done', text),
   mouse: (over) => ipcRenderer.send('mouse', over),
+  move: (dx, dy) => ipcRenderer.send('move', dx, dy),
+  moved: () => ipcRenderer.send('moved'),
   on: (ch, fn) => ipcRenderer.on(ch, () => fn()),
 })

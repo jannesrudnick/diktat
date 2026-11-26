@@ -1,4 +1,4 @@
-const { shell, app, BrowserWindow, globalShortcut, ipcMain, clipboard, screen, Tray, Menu, ClipboardItem, safeStorage, systemPreferences, nativeImage, session, desktopCapturer } = require('electron')
+const { shell, app, BrowserWindow, globalShortcut, ipcMain, clipboard, screen, Tray, Menu, safeStorage, systemPreferences, nativeImage, session } = require('electron')
 const { execFile } = require('child_process')
 const fs = require('fs')
 const path = require('path')
@@ -27,17 +27,25 @@ const activeKey = () => { const c = loadConfig(); return c.keys[c.provider] || '
 // Plain text, one "[YYYY-MM-DD HH:MM:SS] text" line per entry.
 const historyFile = () => path.join(app.getPath('userData'), 'verlauf.txt')
 const stamp = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 19).replace('T', ' ')
-const logTranscript = (text) => fs.appendFileSync(historyFile(), `[${stamp(new Date())}] ${text.replace(/\s*\n\s*/g, ' ')}\n`)
+// Newlines (speaker turns) are escaped as \\n so each entry stays on one line.
+const logTranscript = (text) => fs.appendFileSync(historyFile(), `[${stamp(new Date())}] ${text.replace(/\\/g, '\\\\').replace(/\n/g, '\\n')}\n`)
+const unescape = (t) => t.replace(/\\(.)/g, (_, c) => (c === 'n' ? '\n' : c))
 function recentTranscripts(n = 10) {
   let lines = []
   try { lines = fs.readFileSync(historyFile(), 'utf8').trimEnd().split('\n') } catch {}
-  return lines.slice(-n).reverse().map((l) => l.match(/^\[([^\]]+)\] (.*)$/)).filter(Boolean).map(([, time, text]) => ({ time, text }))
+  return lines.slice(-n).reverse().map((l) => l.match(/^\[([^\]]+)\] (.*)$/)).filter(Boolean).map(([, time, text]) => ({ time, text: unescape(text) }))
 }
 
 let pill, settings, tray, recording = false, appActive = false
 
+// Where the user dragged the pill last; default is bottom center of the display with the cursor.
+// A saved spot whose display is gone (unplugged monitor) falls back to the default.
 function place() {
   const { width, height } = SIZE
+  const saved = loadConfig().pillPos
+  if (saved && screen.getAllDisplays().some(({ bounds: b }) => saved.x + width / 2 >= b.x && saved.x + width / 2 < b.x + b.width && saved.y + height / 2 >= b.y && saved.y + height / 2 < b.y + b.height)) {
+    return pill.setBounds({ width, height, ...saved })
+  }
   const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   pill.setBounds({ width, height, x: Math.round(workArea.x + (workArea.width - width) / 2), y: workArea.y + workArea.height - height - 8 })
 }
@@ -83,16 +91,9 @@ function toggle() {
   place()
   floatOverEverything()
   pill.showInactive()
-  // Only while recording: Enter inserts, Esc discards (swallowed system-wide meanwhile).
-  globalShortcut.register('Return', () => pill.webContents.send('stop'))
-  globalShortcut.register('Escape', () => pill.webContents.send('cancel'))
   // As a user gesture, since getDisplayMedia (system audio) requires one.
   pill.webContents.executeJavaScript('start()', true).catch(console.error)
 }
-
-// Electron ≥44 clipboard is async (web-style). Items from read() must be rebuilt before write().
-const snapshotClipboard = async () => Promise.all((await clipboard.read()).map(async (i) =>
-  new ClipboardItem(Object.fromEntries(await Promise.all(i.types.map(async (t) => [t, await i.getType(t)]))))))
 
 // Simulated paste shortcut, per platform.
 const wayland = Boolean(process.env.WAYLAND_DISPLAY)
@@ -105,15 +106,12 @@ const PASTE = {
 }[process.platform]
 
 // Paste into whatever app has focus (pill is non-focusable, so focus never left it).
+// The text stays in the clipboard afterwards, so it can be pasted again.
 async function paste(text) {
   // Safety net: if Diktat got activated anyway, hand focus back to the previous app first.
   if (appActive && !settings?.isFocused()) { app.hide(); await new Promise((r) => setTimeout(r, 150)) }
-  const prev = await snapshotClipboard().catch(() => [])
   await clipboard.writeText(text)
-  execFile(...PASTE, { windowsHide: true }, (err) => {
-    if (err) return console.error(`Paste via ${PASTE[0]} failed – text stays in clipboard`, err.message)
-    setTimeout(() => prev.length && clipboard.write(prev).catch(console.error), 500)
-  })
+  execFile(...PASTE, { windowsHide: true }, (err) => err && console.error(`Paste via ${PASTE[0]} failed – text stays in clipboard`, err.message))
 }
 
 ipcMain.handle('get-config', () => { const c = loadConfig(); return { provider: c.provider, key: c.keys[c.provider] || '', systemAudio: Boolean(c.systemAudio) } })
@@ -135,8 +133,6 @@ ipcMain.handle('eleven-token', async () => {
 })
 ipcMain.on('done', (_, text) => {
   recording = false
-  globalShortcut.unregister('Return')
-  globalShortcut.unregister('Escape')
   pill.hide()
   if (!text) return
   try { logTranscript(text) } catch (e) { console.error('Could not write transcript log', e.message) }
@@ -144,13 +140,16 @@ ipcMain.on('done', (_, text) => {
   paste(text)
 })
 ipcMain.on('mouse', (_, over) => pill.setIgnoreMouseEvents(!over, { forward: true }))
+// Drag handle: renderer sends screen-space deltas, we move the window and remember where it ended up.
+ipcMain.on('move', (_, dx, dy) => { const [x, y] = pill.getPosition(); pill.setPosition(x + dx, y + dy) })
+ipcMain.on('moved', () => { const [x, y] = pill.getPosition(); saveConfig({ ...loadConfig(), pillPos: { x, y } }) })
 
 // Last transcripts; clicking one copies it to the clipboard.
 function historyMenu() {
   const recent = recentTranscripts()
   return [
     ...recent.map(({ time, text }) => ({
-      label: `${time.slice(11, 16)}  ${text.length > 60 ? `${text.slice(0, 60)}…` : text}`,
+      label: `${time.slice(11, 16)}  ${text.length > 60 ? `${text.slice(0, 60)}…` : text}`.replace(/\n/g, ' '),
       toolTip: text, click: () => clipboard.writeText(text),
     })),
     recent.length ? { label: 'Klick kopiert in die Zwischenablage', enabled: false } : { label: 'Noch nichts diktiert', enabled: false },
@@ -160,7 +159,7 @@ function historyMenu() {
 }
 
 const trayMenu = () => Menu.buildFromTemplate([
-  { label: `Diktieren (${SHORTCUT_LABEL}) – Enter fügt ein, Esc verwirft`, click: toggle },
+  { label: `Diktieren (${SHORTCUT_LABEL}) – nochmal drücken stoppt`, click: toggle },
   { label: 'Provider', submenu: Object.entries(PROVIDERS).map(([id, label]) => ({
     label, type: 'radio', checked: loadConfig().provider === id,
     click: () => { const c = loadConfig(); saveConfig({ ...c, provider: id }); if (!c.keys[id]) openSettings() },
@@ -189,12 +188,10 @@ app.whenReady().then(async () => {
   app.dock?.hide()
   Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'editMenu' }])) // enables ⌘V/⌘C/⌘A in inputs
   await systemPreferences.askForMediaAccess?.('microphone')
-  // System audio: getDisplayMedia in the pill gets the main screen plus loopback audio, without a picker.
-  // The video track is dropped right away; macOS asks for Screen Recording permission once.
-  session.defaultSession.setDisplayMediaRequestHandler((_, cb) => {
-    desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } })
-      .then(([source]) => cb(source ? { video: source, audio: 'loopback' } : {}), () => cb({}))
-  })
+  // System audio: getDisplayMedia in the pill gets loopback audio without a picker. Video is mandatory,
+  // so we hand it the pill's own frame (dropped right away) instead of a screen: no Screen Recording
+  // permission. macOS (CoreAudio tap) only asks for "System Audio Recording" once.
+  session.defaultSession.setDisplayMediaRequestHandler((req, cb) => cb({ video: req.frame, audio: 'loopback' }))
   createPill()
   if (!globalShortcut.register(SHORTCUT, toggle)) console.error(`Shortcut ${SHORTCUT} already taken`)
 
