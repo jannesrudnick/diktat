@@ -1,4 +1,4 @@
-const { shell, app, BrowserWindow, globalShortcut, ipcMain, clipboard, screen, Tray, Menu, ClipboardItem, safeStorage, systemPreferences, nativeImage, session, desktopCapturer } = require('electron')
+const { shell, app, BrowserWindow, globalShortcut, ipcMain, clipboard, screen, Tray, Menu, ClipboardItem, safeStorage, systemPreferences, nativeImage, session } = require('electron')
 const { execFile } = require('child_process')
 const fs = require('fs')
 const path = require('path')
@@ -27,17 +27,25 @@ const activeKey = () => { const c = loadConfig(); return c.keys[c.provider] || '
 // Plain text, one "[YYYY-MM-DD HH:MM:SS] text" line per entry.
 const historyFile = () => path.join(app.getPath('userData'), 'verlauf.txt')
 const stamp = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 19).replace('T', ' ')
-const logTranscript = (text) => fs.appendFileSync(historyFile(), `[${stamp(new Date())}] ${text.replace(/\s*\n\s*/g, ' ')}\n`)
+// Newlines (speaker turns) are escaped as \\n so each entry stays on one line.
+const logTranscript = (text) => fs.appendFileSync(historyFile(), `[${stamp(new Date())}] ${text.replace(/\\/g, '\\\\').replace(/\n/g, '\\n')}\n`)
+const unescape = (t) => t.replace(/\\(.)/g, (_, c) => (c === 'n' ? '\n' : c))
 function recentTranscripts(n = 10) {
   let lines = []
   try { lines = fs.readFileSync(historyFile(), 'utf8').trimEnd().split('\n') } catch {}
-  return lines.slice(-n).reverse().map((l) => l.match(/^\[([^\]]+)\] (.*)$/)).filter(Boolean).map(([, time, text]) => ({ time, text }))
+  return lines.slice(-n).reverse().map((l) => l.match(/^\[([^\]]+)\] (.*)$/)).filter(Boolean).map(([, time, text]) => ({ time, text: unescape(text) }))
 }
 
 let pill, settings, tray, recording = false, appActive = false
 
+// Where the user dragged the pill last; default is bottom center of the display with the cursor.
+// A saved spot whose display is gone (unplugged monitor) falls back to the default.
 function place() {
   const { width, height } = SIZE
+  const saved = loadConfig().pillPos
+  if (saved && screen.getAllDisplays().some(({ bounds: b }) => saved.x + width / 2 >= b.x && saved.x + width / 2 < b.x + b.width && saved.y + height / 2 >= b.y && saved.y + height / 2 < b.y + b.height)) {
+    return pill.setBounds({ width, height, ...saved })
+  }
   const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   pill.setBounds({ width, height, x: Math.round(workArea.x + (workArea.width - width) / 2), y: workArea.y + workArea.height - height - 8 })
 }
@@ -144,13 +152,16 @@ ipcMain.on('done', (_, text) => {
   paste(text)
 })
 ipcMain.on('mouse', (_, over) => pill.setIgnoreMouseEvents(!over, { forward: true }))
+// Drag handle: renderer sends screen-space deltas, we move the window and remember where it ended up.
+ipcMain.on('move', (_, dx, dy) => { const [x, y] = pill.getPosition(); pill.setPosition(x + dx, y + dy) })
+ipcMain.on('moved', () => { const [x, y] = pill.getPosition(); saveConfig({ ...loadConfig(), pillPos: { x, y } }) })
 
 // Last transcripts; clicking one copies it to the clipboard.
 function historyMenu() {
   const recent = recentTranscripts()
   return [
     ...recent.map(({ time, text }) => ({
-      label: `${time.slice(11, 16)}  ${text.length > 60 ? `${text.slice(0, 60)}…` : text}`,
+      label: `${time.slice(11, 16)}  ${text.length > 60 ? `${text.slice(0, 60)}…` : text}`.replace(/\n/g, ' '),
       toolTip: text, click: () => clipboard.writeText(text),
     })),
     recent.length ? { label: 'Klick kopiert in die Zwischenablage', enabled: false } : { label: 'Noch nichts diktiert', enabled: false },
@@ -189,12 +200,10 @@ app.whenReady().then(async () => {
   app.dock?.hide()
   Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'editMenu' }])) // enables ⌘V/⌘C/⌘A in inputs
   await systemPreferences.askForMediaAccess?.('microphone')
-  // System audio: getDisplayMedia in the pill gets the main screen plus loopback audio, without a picker.
-  // The video track is dropped right away; macOS asks for Screen Recording permission once.
-  session.defaultSession.setDisplayMediaRequestHandler((_, cb) => {
-    desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } })
-      .then(([source]) => cb(source ? { video: source, audio: 'loopback' } : {}), () => cb({}))
-  })
+  // System audio: getDisplayMedia in the pill gets loopback audio without a picker. Video is mandatory,
+  // so we hand it the pill's own frame (dropped right away) instead of a screen: no Screen Recording
+  // permission. macOS (CoreAudio tap) only asks for "System Audio Recording" once.
+  session.defaultSession.setDisplayMediaRequestHandler((req, cb) => cb({ video: req.frame, audio: 'loopback' }))
   createPill()
   if (!globalShortcut.register(SHORTCUT, toggle)) console.error(`Shortcut ${SHORTCUT} already taken`)
 
