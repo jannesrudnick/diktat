@@ -1,4 +1,4 @@
-const { shell, app, BrowserWindow, globalShortcut, ipcMain, clipboard, screen, Tray, Menu, ClipboardItem, safeStorage, systemPreferences, nativeImage, session } = require('electron')
+const { shell, app, BrowserWindow, globalShortcut, ipcMain, clipboard, screen, Tray, Menu, safeStorage, systemPreferences, nativeImage, session } = require('electron')
 const { execFile } = require('child_process')
 const fs = require('fs')
 const path = require('path')
@@ -91,16 +91,9 @@ function toggle() {
   place()
   floatOverEverything()
   pill.showInactive()
-  // Only while recording: Enter inserts, Esc discards (swallowed system-wide meanwhile).
-  globalShortcut.register('Return', () => pill.webContents.send('stop'))
-  globalShortcut.register('Escape', () => pill.webContents.send('cancel'))
   // As a user gesture, since getDisplayMedia (system audio) requires one.
   pill.webContents.executeJavaScript('start()', true).catch(console.error)
 }
-
-// Electron ≥44 clipboard is async (web-style). Items from read() must be rebuilt before write().
-const snapshotClipboard = async () => Promise.all((await clipboard.read()).map(async (i) =>
-  new ClipboardItem(Object.fromEntries(await Promise.all(i.types.map(async (t) => [t, await i.getType(t)]))))))
 
 // Simulated paste shortcut, per platform.
 const wayland = Boolean(process.env.WAYLAND_DISPLAY)
@@ -113,15 +106,12 @@ const PASTE = {
 }[process.platform]
 
 // Paste into whatever app has focus (pill is non-focusable, so focus never left it).
+// The text stays in the clipboard afterwards, so it can be pasted again.
 async function paste(text) {
   // Safety net: if Diktat got activated anyway, hand focus back to the previous app first.
   if (appActive && !settings?.isFocused()) { app.hide(); await new Promise((r) => setTimeout(r, 150)) }
-  const prev = await snapshotClipboard().catch(() => [])
   await clipboard.writeText(text)
-  execFile(...PASTE, { windowsHide: true }, (err) => {
-    if (err) return console.error(`Paste via ${PASTE[0]} failed – text stays in clipboard`, err.message)
-    setTimeout(() => prev.length && clipboard.write(prev).catch(console.error), 500)
-  })
+  execFile(...PASTE, { windowsHide: true }, (err) => err && console.error(`Paste via ${PASTE[0]} failed – text stays in clipboard`, err.message))
 }
 
 ipcMain.handle('get-config', () => { const c = loadConfig(); return { provider: c.provider, key: c.keys[c.provider] || '', systemAudio: Boolean(c.systemAudio) } })
@@ -143,8 +133,6 @@ ipcMain.handle('eleven-token', async () => {
 })
 ipcMain.on('done', (_, text) => {
   recording = false
-  globalShortcut.unregister('Return')
-  globalShortcut.unregister('Escape')
   pill.hide()
   if (!text) return
   try { logTranscript(text) } catch (e) { console.error('Could not write transcript log', e.message) }
@@ -171,7 +159,7 @@ function historyMenu() {
 }
 
 const trayMenu = () => Menu.buildFromTemplate([
-  { label: `Diktieren (${SHORTCUT_LABEL}) – Enter fügt ein, Esc verwirft`, click: toggle },
+  { label: `Diktieren (${SHORTCUT_LABEL}) – nochmal drücken stoppt`, click: toggle },
   { label: 'Provider', submenu: Object.entries(PROVIDERS).map(([id, label]) => ({
     label, type: 'radio', checked: loadConfig().provider === id,
     click: () => { const c = loadConfig(); saveConfig({ ...c, provider: id }); if (!c.keys[id]) openSettings() },

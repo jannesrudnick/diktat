@@ -42,12 +42,14 @@
     height: 32px; border-radius: 999px; transition: background .15s, transform .1s;
   }
   button:active { transform: scale(.98); }
-  #cancel { width: 32px; justify-content: center; background: transparent; color: #a1a1aa; }
-  #cancel:hover { background: rgb(255 255 255 / .1); color: #fff; }
-  #insert { background: #fff; color: #09090b; font-weight: 500; padding: 0 12px; margin-left: 2px; }
-  #insert:hover { background: #e4e4e7; }
-  kbd { font: 11px ui-monospace, monospace; opacity: .55; }
-  .busy #insert, .busy #cancel { opacity: .5; pointer-events: none; }
+  #pause { width: 32px; justify-content: center; background: transparent; color: #a1a1aa; }
+  #pause:hover { background: rgb(255 255 255 / .1); color: #fff; }
+  #pause .play, .paused #pause .bars { display: none; }
+  .paused #pause .play { display: block; }
+  .paused #dot { background: #71717a; box-shadow: none; }
+  #stop { background: #fff; color: #09090b; font-weight: 500; padding: 0 12px; margin-left: 2px; }
+  #stop:hover { background: #e4e4e7; }
+  .busy #stop, .busy #pause { opacity: .5; pointer-events: none; }
   @keyframes in { from { opacity: 0; transform: translateY(4px) } }
 </style>
 <div id="card" class="surface"><p id="text"></p></div>
@@ -58,10 +60,13 @@
   <div class="rec"><span id="dot"></span><span id="timer">00:00</span></div>
   <div id="bars"><span></span><span></span><span></span><span></span><span></span></div>
   <span class="divider"></span>
-  <button id="cancel" title="Verwerfen (Esc)">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+  <button id="pause" title="Pause / Weiter">
+    <svg class="bars" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+    <svg class="play" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l11-6.5a1 1 0 0 0 0-1.72l-11-6.5A1 1 0 0 0 8 5.5Z"/></svg>
   </button>
-  <button id="insert" title="Einfügen (Enter)">Einfügen <kbd>⏎</kbd></button>
+  <button id="stop" title="Stopp: speichern, einfügen, in die Zwischenablage (⌘⇧Space)">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>Stopp
+  </button>
 </div>
 <script src="providers.js"></script>
 <script>
@@ -136,7 +141,7 @@ function finish(result) {
   ses.ctx?.close()
   ses.tracks.forEach((t) => t.conn.close())
   s = null
-  document.body.classList.remove('busy')
+  document.body.classList.remove('busy', 'paused')
   setLevel(0)
   api.done(result.trim())
 }
@@ -145,7 +150,7 @@ function fail(ses, msg) {
   if (s !== ses) return
   if (ses.stopping) return finish(transcript(ses)) // keep what we have
   text.innerHTML = `<span class="err">⚠ ${esc(msg)}</span>`
-  setTimeout(() => s === ses && finish(''), 3000)
+  setTimeout(() => s === ses && finish(transcript(ses)), 3000) // whatever arrived before the error is still saved
 }
 
 // System audio (the other side of a call) via loopback capture. Optional: falls back to mic only.
@@ -165,9 +170,9 @@ async function start() {
   const p = PROVIDERS[provider]
   const ses = (s = { tracks: [], segs: [] })
   hint = withSystem ? 'Sprich einfach … (Mikrofon + Systemaudio)' : 'Sprich einfach …'
-  const t0 = Date.now()
+  ses.t0 = Date.now()
   const tick = () => {
-    const sec = Math.floor((Date.now() - t0) / 1000)
+    const sec = Math.floor(((ses.pausedAt ?? Date.now()) - ses.t0) / 1000)
     timer.textContent = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`
   }
   tick()
@@ -204,6 +209,8 @@ async function start() {
     const node = new AudioWorkletNode(ses.ctx, 'tap', { channelCount: 1, channelCountMode: 'explicit' })
     node.port.onmessage = ({ data }) => {
       if (ses.stopping || tr.done) return
+      // Paused: keep the connection alive with silence (providers drop idle sockets).
+      if (ses.pausedAt) return (tr.level = 0), setLevel(0), tr.conn.audio(new Float32Array(data.length))
       // RMS → 0..1 with fast attack / slow release so the animation feels alive but not jittery.
       const rms = Math.sqrt(data.reduce((a, v) => a + v * v, 0) / data.length)
       const target = Math.min(1, rms * 12)
@@ -230,11 +237,18 @@ function stop() {
   setTimeout(() => s === ses && finish(transcript(ses)), 5000) // safety net
 }
 
+function togglePause() {
+  if (!s || s.stopping) return
+  const ses = s
+  if (ses.pausedAt) { ses.t0 += Date.now() - ses.pausedAt; ses.pausedAt = null }
+  else ses.pausedAt = Date.now()
+  document.body.classList.toggle('paused', Boolean(ses.pausedAt))
+}
+
 api.on('start', start)
 api.on('stop', stop)
-api.on('cancel', () => finish(''))
-insert.onclick = stop
-cancel.onclick = () => finish('')
+document.getElementById('stop').onclick = stop // `stop` the global is the function, not the button
+pause.onclick = togglePause
 
 // Drag handle: pointer capture keeps the events coming while the window follows the cursor.
 let drag = null
